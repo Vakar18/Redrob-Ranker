@@ -1,0 +1,98 @@
+version: '3.9'
+
+services:
+  # ── NestJS API ──────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: redrob-ranker-app
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      MONGODB_URI: mongodb://mongo:27017/redrob_ranker
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: claude-sonnet-4-6
+      RANKING_BATCH_SIZE: 50
+      RANKING_CONCURRENCY: 5
+      RANKING_TOP_N: 100
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./output:/app/output
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - redrob-net
+    command: npm run start:dev
+
+  # ── MongoDB ──────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: redrob-mongo
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    environment:
+      MONGO_INITDB_DATABASE: redrob_ranker
+    healthcheck:
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - redrob-net
+
+  # ── Redis (BullMQ broker) ─────────────────────────────────────────
+  redis:
+    image: redis:7.4-alpine
+    container_name: redrob-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - redrob-net
+
+  # ── Bull Board (queue dashboard) ─────────────────────────────────
+  bull-board:
+    image: deadly0/bull-board:latest
+    container_name: redrob-bull-board
+    restart: unless-stopped
+    ports:
+      - '3001:3000'
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - redrob-net
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  redrob-net:
+    driver: bridge
