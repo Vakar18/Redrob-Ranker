@@ -14,9 +14,9 @@ services:
     environment:
       NODE_ENV: development
       PORT: 3000
-      MONGODB_URI: mongodb://mongo:27017/redrob_ranker
+      MONGODB_URI: mongodb://mongo:27018/redrob_ranker
       REDIS_HOST: redis
-      REDIS_PORT: 6379
+      REDIS_PORT: 6378
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: claude-sonnet-4-6
       RANKING_BATCH_SIZE: 50
@@ -41,7 +41,7 @@ services:
     container_name: redrob-mongo
     restart: unless-stopped
     ports:
-      - '27017:27017'
+      - '27018:27017'
     volumes:
       - mongo_data:/data/db
       - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
@@ -61,7 +61,7 @@ services:
     container_name: redrob-redis
     restart: unless-stopped
     ports:
-      - '6379:6379'
+      - '6378:6378'
     volumes:
       - redis_data:/data
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1
@@ -82,7 +82,7 @@ services:
       - '3001:3000'
     environment:
       REDIS_HOST: redis
-      REDIS_PORT: 6379
+      REDIS_PORT: 6378
     depends_on:
       redis:
         condition: service_healthy

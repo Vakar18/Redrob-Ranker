@@ -2,7 +2,7 @@ import { registerAs } from '@nestjs/config';
 
 export const appConfig = registerAs('app', () => ({
   nodeEnv: process.env.NODE_ENV || 'development',
-  port: process.env.PORT || 3000,
+  port: parseInt(process.env.PORT ?? '3000', 10) || 3000,
   name: process.env.APP_NAME || 'redrob-ranker',
 }));
 
@@ -13,9 +13,9 @@ export const mongoConfig = registerAs('mongo', () => ({
 
 export const redisConfig = registerAs('redis', () => ({
   host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
+  port: parseInt(process.env.REDIS_PORT ?? '6379', 10) || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
-  db: process.env.REDIS_DB || 0,
+  db: parseInt(process.env.REDIS_DB ?? '0', 10) || 0,
 }));
 
 export const llmConfig = registerAs('llm', () => ({
@@ -24,19 +24,22 @@ export const llmConfig = registerAs('llm', () => ({
   // Fallback if primary fails or rate-limits
   fallbackProvider: process.env.LLM_FALLBACK_PROVIDER || 'gemini',
 
-  // Groq — free, fast (llama3-70b, mixtral)
+  // Groq — free, fast. Model name is AUTO-DISCOVERED at runtime since
+  // Groq's free-tier catalog changes often (old names get decommissioned).
+  // Set GROQ_MODEL only if you want to force a specific model.
   // Sign up: https://console.groq.com
   groq: {
     apiKey: process.env.GROQ_API_KEY || '',
-    model: process.env.GROQ_MODEL || 'llama3-70b-8192',
+    model: process.env.GROQ_MODEL || '', // empty = auto-discover
     maxTokens: 2048,
   },
 
-  // Google Gemini — free tier (1500 req/day, 60 req/min)
+  // Google Gemini — free tier. Model name is AUTO-DISCOVERED at runtime
+  // for the same reason. Set GEMINI_MODEL to force a specific model.
   // Get key: https://aistudio.google.com/app/apikey
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-1.5-flash',
+    model: process.env.GEMINI_MODEL || '', // empty = auto-discover
     maxTokens: 2048,
   },
 
@@ -50,14 +53,14 @@ export const llmConfig = registerAs('llm', () => ({
 }));
 
 export const rankingConfig = registerAs('ranking', () => ({
-  batchSize: (process.env.RANKING_BATCH_SIZE, 10) || 50,
-  concurrency: (process.env.RANKING_CONCURRENCY, 10) || 5,
-  topN: (process.env.RANKING_TOP_N, 10) || 100,
-  jobTimeoutMs:   (process.env.RANKING_JOB_TIMEOUT_MS, 10) || 600000,
+  batchSize: parseInt(process.env.RANKING_BATCH_SIZE ?? '50', 10) || 50,
+  concurrency: parseInt(process.env.RANKING_CONCURRENCY ?? '5', 10) || 5,
+  topN: parseInt(process.env.RANKING_TOP_N ?? '100', 10) || 100,
+  jobTimeoutMs: parseInt(process.env.RANKING_JOB_TIMEOUT_MS ?? '600000', 10) || 600000,
   weights: {
-    skillMatch: (process.env.WEIGHT_SKILL_MATCH) || 0.35,
-    careerFit: (process.env.WEIGHT_CAREER_FIT) || 0.30,
-    behavioral: (process.env.WEIGHT_BEHAVIORAL) || 0.20,
-    availability: (process.env.WEIGHT_AVAILABILITY) || 0.15,
+    skillMatch: parseFloat(process.env.WEIGHT_SKILL_MATCH ?? '0.35') || 0.35,
+    careerFit: parseFloat(process.env.WEIGHT_CAREER_FIT ?? '0.30') || 0.30,
+    behavioral: parseFloat(process.env.WEIGHT_BEHAVIORAL ?? '0.20') || 0.20,
+    availability: parseFloat(process.env.WEIGHT_AVAILABILITY ?? '0.15') || 0.15,
   },
 }));

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -20,11 +20,34 @@ export interface LlmEvaluation {
   reasoning: string;
 }
 
+// ── Model candidate lists ─────────────────────────────────────────
+// Provider catalogs change frequently (sometimes monthly) — these are
+// tried in order at startup, and again mid-run if a model is rejected.
+
+const GROQ_MODEL_CANDIDATES = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'llama-4-scout',
+  'qwen3-32b',
+];
+
+const GEMINI_MODEL_CANDIDATES = [
+  'gemini-2.5-flash',
+  'gemini-3.5-flash',
+  'gemini-2.0-flash',
+  'gemini-flash-latest',
+];
+
+function isModelErrorMessage(msg: string | undefined): boolean {
+  return /decommissioned|deprecated|not found|not supported|invalid.?model/i.test(msg || '');
+}
+
 // ────────────────────────────────────────────────────────────────
 // Provider implementations
 // ────────────────────────────────────────────────────────────────
 
-/** Groq — free tier, very fast (llama3-70b) */
 async function callGroq(
   apiKey: string,
   model: string,
@@ -45,7 +68,6 @@ async function callGroq(
   return response.choices[0]?.message?.content ?? '';
 }
 
-/** Google Gemini — free tier (1500 req/day, 60 req/min) */
 async function callGemini(
   apiKey: string,
   model: string,
@@ -61,7 +83,6 @@ async function callGemini(
   return result.response.text();
 }
 
-/** Ollama — fully local, zero cost, no internet required */
 async function callOllama(
   baseUrl: string,
   model: string,
@@ -83,8 +104,60 @@ async function callOllama(
     }),
   });
   if (!response.ok) throw new Error(`Ollama HTTP ${response.status}`);
-  const data = await response.json() as any;
+  const data = (await response.json()) as any;
   return data?.message?.content ?? '';
+}
+
+// ── Live model discovery ──────────────────────────────────────────
+
+async function discoverGroqModel(apiKey: string, override: string | null): Promise<string> {
+  if (override) return override;
+  if (!apiKey) return GROQ_MODEL_CANDIDATES[0];
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as any;
+    const liveIds = new Set((data.data || []).map((m: any) => m.id));
+
+    for (const candidate of GROQ_MODEL_CANDIDATES) {
+      if (liveIds.has(candidate)) return candidate;
+    }
+    const anyModel = (data.data || []).find((m: any) => !/whisper|tts|guard/i.test(m.id));
+    if (anyModel) return anyModel.id;
+  } catch {
+    // Fall through to default candidate below
+  }
+  return GROQ_MODEL_CANDIDATES[0];
+}
+
+async function discoverGeminiModel(apiKey: string, override: string | null): Promise<string> {
+  if (override) return override;
+  if (!apiKey) return GEMINI_MODEL_CANDIDATES[0];
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as any;
+    const liveIds = new Set(
+      (data.models || []).map((m: any) => m.name.replace('models/', '')),
+    );
+
+    for (const candidate of GEMINI_MODEL_CANDIDATES) {
+      if (liveIds.has(candidate)) return candidate;
+    }
+    const anyFlash = [...liveIds].find(
+      (id) => /flash/i.test(id as string) && !/image|tts|embed/i.test(id as string),
+    );
+    if (anyFlash) return anyFlash as string;
+  } catch {
+    // Fall through to default candidate below
+  }
+  return GEMINI_MODEL_CANDIDATES[0];
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -92,33 +165,67 @@ async function callOllama(
 // ────────────────────────────────────────────────────────────────
 
 @Injectable()
-export class LlmReranker {
+export class LlmReranker implements OnModuleInit {
   private readonly logger = new Logger(LlmReranker.name);
 
   private readonly provider: LlmProvider;
   private readonly fallbackProvider: LlmProvider;
   private readonly groqKey: string;
-  private readonly groqModel: string;
   private readonly geminiKey: string;
-  private readonly geminiModel: string;
   private readonly ollamaUrl: string;
   private readonly ollamaModel: string;
   private readonly maxTokens: number;
 
-  constructor(private readonly config: ConfigService) {
-    this.provider        = (config.get<string>('llm.provider', 'groq') as LlmProvider);
-    this.fallbackProvider= (config.get<string>('llm.fallbackProvider', 'gemini') as LlmProvider);
-    this.groqKey         = config.get<string>('llm.groq.apiKey', '');
-    this.groqModel       = config.get<string>('llm.groq.model', 'llama3-70b-8192');
-    this.geminiKey       = config.get<string>('llm.gemini.apiKey', '');
-    this.geminiModel     = config.get<string>('llm.gemini.model', 'gemini-1.5-flash');
-    this.ollamaUrl       = config.get<string>('llm.ollama.baseUrl', 'http://localhost:11434');
-    this.ollamaModel     = config.get<string>('llm.ollama.model', 'llama3.1');
-    this.maxTokens       = config.get<number>('llm.groq.maxTokens', 2048);
+  // Explicit overrides from config (null = auto-discover)
+  private readonly groqModelOverride: string | null;
+  private readonly geminiModelOverride: string | null;
 
-    this.logger.log(
-      `LLM provider: ${this.provider} → fallback: ${this.fallbackProvider}`,
-    );
+  // Resolved at module init via live discovery, then mutated in-place
+  // by the self-healing retry logic if a model gets rejected mid-run.
+  private groqModel: string;
+  private geminiModel: string;
+  private groqCandidateIdx = -1;
+  private geminiCandidateIdx = -1;
+
+  constructor(private readonly config: ConfigService) {
+    this.provider = config.get<string>('llm.provider', 'groq') as LlmProvider;
+    this.fallbackProvider = config.get<string>('llm.fallbackProvider', 'gemini') as LlmProvider;
+    this.groqKey = config.get<string>('llm.groq.apiKey', '');
+    this.geminiKey = config.get<string>('llm.gemini.apiKey', '');
+    this.ollamaUrl = config.get<string>('llm.ollama.baseUrl', 'http://localhost:11434');
+    this.ollamaModel = config.get<string>('llm.ollama.model', 'llama3.1');
+    this.maxTokens = config.get<number>('llm.groq.maxTokens', 2048);
+
+    // Only treat as an override if explicitly set (not the old hardcoded defaults)
+    const groqCfg = config.get<string>('llm.groq.model', '');
+    const geminiCfg = config.get<string>('llm.gemini.model', '');
+    this.groqModelOverride = groqCfg && groqCfg.trim() ? groqCfg : null;
+    this.geminiModelOverride = geminiCfg && geminiCfg.trim() ? geminiCfg : null;
+
+    // Safe placeholders until onModuleInit resolves the real ones
+    this.groqModel = this.groqModelOverride ?? GROQ_MODEL_CANDIDATES[0];
+    this.geminiModel = this.geminiModelOverride ?? GEMINI_MODEL_CANDIDATES[0];
+
+    this.logger.log(`LLM provider: ${this.provider} → fallback: ${this.fallbackProvider}`);
+  }
+
+  /**
+   * Resolve which models are actually live on each provider right now.
+   * Runs once at app startup so the first real request doesn't eat the
+   * discovery latency.
+   */
+  async onModuleInit(): Promise<void> {
+    const needsGroq = this.provider === 'groq' || this.fallbackProvider === 'groq';
+    const needsGemini = this.provider === 'gemini' || this.fallbackProvider === 'gemini';
+
+    if (needsGroq && this.groqKey) {
+      this.groqModel = await discoverGroqModel(this.groqKey, this.groqModelOverride);
+      this.logger.log(`Groq model resolved: ${this.groqModel}`);
+    }
+    if (needsGemini && this.geminiKey) {
+      this.geminiModel = await discoverGeminiModel(this.geminiKey, this.geminiModelOverride);
+      this.logger.log(`Gemini model resolved: ${this.geminiModel}`);
+    }
   }
 
   /**
@@ -139,10 +246,7 @@ export class LlmReranker {
   /**
    * Generate a 1-2 sentence reasoning for one candidate.
    */
-  async generateReasoning(
-    candidate: RawCandidate,
-    score: ScoreBreakdown,
-  ): Promise<string> {
+  async generateReasoning(candidate: RawCandidate, score: ScoreBreakdown): Promise<string> {
     const systemPrompt =
       'You are a technical recruiter writing concise candidate assessment notes. Write exactly 1-2 sentences (max 50 words). Be specific about real experience. No bullet points, no markdown.';
     const userPrompt =
@@ -161,10 +265,9 @@ export class LlmReranker {
   // ── Provider router with fallback ────────────────────────────────
 
   private async callWithFallback(system: string, user: string): Promise<string> {
-    const providers: LlmProvider[] = [
-      this.provider,
-      this.fallbackProvider,
-    ].filter((p, i, arr) => p !== 'none' && arr.indexOf(p) === i);
+    const providers: LlmProvider[] = [this.provider, this.fallbackProvider].filter(
+      (p, i, arr) => p !== 'none' && arr.indexOf(p) === i,
+    );
 
     let lastError: Error | null = null;
 
@@ -181,25 +284,56 @@ export class LlmReranker {
     throw lastError ?? new Error('All LLM providers failed');
   }
 
-  private async callProvider(
-    provider: LlmProvider,
-    system: string,
-    user: string,
-  ): Promise<string> {
+  private async callProvider(provider: LlmProvider, system: string, user: string): Promise<string> {
     switch (provider) {
       case 'groq':
         if (!this.groqKey) throw new Error('GROQ_API_KEY not set');
-        return callGroq(this.groqKey, this.groqModel, system, user, this.maxTokens);
+        return this.callGroqWithSelfHeal(system, user);
 
       case 'gemini':
         if (!this.geminiKey) throw new Error('GEMINI_API_KEY not set');
-        return callGemini(this.geminiKey, this.geminiModel, system, user);
+        return this.callGeminiWithSelfHeal(system, user);
 
       case 'ollama':
         return callOllama(this.ollamaUrl, this.ollamaModel, system, user, this.maxTokens);
 
       default:
         throw new Error(`Unknown provider: ${provider}`);
+    }
+  }
+
+  /** Calls Groq; if the model itself was rejected (deprecated mid-run),
+   *  advances to the next candidate and retries once before giving up. */
+  private async callGroqWithSelfHeal(system: string, user: string): Promise<string> {
+    try {
+      return await callGroq(this.groqKey, this.groqModel, system, user, this.maxTokens);
+    } catch (err: any) {
+      const msg = err?.error?.error?.message || err.message || '';
+      if (isModelErrorMessage(msg) && this.groqCandidateIdx < GROQ_MODEL_CANDIDATES.length - 1) {
+        this.groqCandidateIdx++;
+        const nextModel = GROQ_MODEL_CANDIDATES[this.groqCandidateIdx];
+        this.logger.warn(`Groq model "${this.groqModel}" rejected — retrying once with "${nextModel}"`);
+        this.groqModel = nextModel;
+        return callGroq(this.groqKey, this.groqModel, system, user, this.maxTokens);
+      }
+      throw err;
+    }
+  }
+
+  /** Same self-healing pattern for Gemini. */
+  private async callGeminiWithSelfHeal(system: string, user: string): Promise<string> {
+    try {
+      return await callGemini(this.geminiKey, this.geminiModel, system, user);
+    } catch (err: any) {
+      const msg = err.message || '';
+      if (isModelErrorMessage(msg) && this.geminiCandidateIdx < GEMINI_MODEL_CANDIDATES.length - 1) {
+        this.geminiCandidateIdx++;
+        const nextModel = GEMINI_MODEL_CANDIDATES[this.geminiCandidateIdx];
+        this.logger.warn(`Gemini model "${this.geminiModel}" rejected — retrying once with "${nextModel}"`);
+        this.geminiModel = nextModel;
+        return callGemini(this.geminiKey, this.geminiModel, system, user);
+      }
+      throw err;
     }
   }
 
@@ -216,17 +350,20 @@ export class LlmReranker {
   private buildBatchPrompt(
     candidates: Array<{ candidate: RawCandidate; deterministicScore: ScoreBreakdown }>,
   ): string {
-    const list = candidates.map(({ candidate: c, deterministicScore: d }) =>
-      `${c.candidate_id}: ${c.profile.current_title} @ ${c.profile.current_company} | ` +
-      `${c.profile.years_of_experience}y | ${c.profile.location}, ${c.profile.country}\n` +
-      `Skills: ${c.skills.slice(0, 8).map((s) => `${s.name}(${s.proficiency})`).join(', ')}\n` +
-      `Career: ${c.career_history.slice(0, 3).map((e) => `${e.title}@${e.company}(${e.duration_months}mo)`).join(' → ')}\n` +
-      `Signals: open=${c.redrob_signals.open_to_work_flag}, ` +
-      `last_active=${c.redrob_signals.last_active_date}, ` +
-      `response_rate=${c.redrob_signals.recruiter_response_rate?.toFixed(2)}, ` +
-      `notice=${c.redrob_signals.notice_period_days}d\n` +
-      `DetScore: ${d.total.toFixed(1)}/100`,
-    ).join('\n\n');
+    const list = candidates
+      .map(
+        ({ candidate: c, deterministicScore: d }) =>
+          `${c.candidate_id}: ${c.profile.current_title} @ ${c.profile.current_company} | ` +
+          `${c.profile.years_of_experience}y | ${c.profile.location}, ${c.profile.country}\n` +
+          `Skills: ${c.skills.slice(0, 8).map((s) => `${s.name}(${s.proficiency})`).join(', ')}\n` +
+          `Career: ${c.career_history.slice(0, 3).map((e) => `${e.title}@${e.company}(${e.duration_months}mo)`).join(' → ')}\n` +
+          `Signals: open=${c.redrob_signals.open_to_work_flag}, ` +
+          `last_active=${c.redrob_signals.last_active_date}, ` +
+          `response_rate=${c.redrob_signals.recruiter_response_rate?.toFixed(2)}, ` +
+          `notice=${c.redrob_signals.notice_period_days}d\n` +
+          `DetScore: ${d.total.toFixed(1)}/100`,
+      )
+      .join('\n\n');
 
     return (
       `JD: ${JD_CONTEXT}\n\n` +
@@ -248,7 +385,6 @@ export class LlmReranker {
         .replace(/```/g, '')
         .trim();
 
-      // Find the JSON object even if the model added preamble text
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error('No JSON object found in response');
 
