@@ -4,7 +4,9 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import compression from 'compression';
 import helmet from 'helmet';
+import { getQueueToken } from '@nestjs/bullmq';
 import { AppModule } from './app.module';
+import { setupBullBoard } from './bull-board.setup';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -48,6 +50,15 @@ async function bootstrap() {
       swaggerOptions: { persistAuthorization: true },
     });
     logger.log(`Swagger UI: http://localhost:${port}/api/docs`);
+
+    // ── Bull Board (dev only) ──
+    try {
+      const rankingQueue = app.get(getQueueToken('ranking'));
+      setupBullBoard(app, [rankingQueue]);
+      logger.log(`🎛️ Bull Board: http://localhost:${port}/admin/bull-board`);
+    } catch (error) {
+      logger.warn('Bull Board setup skipped - queue not available');
+    }
   }
 
   await app.listen(port);

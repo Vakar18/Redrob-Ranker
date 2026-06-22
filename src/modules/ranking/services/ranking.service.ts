@@ -152,6 +152,30 @@ export class RankingService {
     return failedJobs.length;
   }
 
+  /**
+   * Pause the worker to stop processing jobs
+   */
+  async pauseWorker(): Promise<void> {
+    await this.rankingQueue.pause();
+    this.logger.log('Ranking queue paused - no more jobs will be processed');
+  }
+
+  /**
+   * Resume the worker to process jobs
+   */
+  async resumeWorker(): Promise<void> {
+    await this.rankingQueue.resume();
+    this.logger.log('Ranking queue resumed - jobs will be processed again');
+  }
+
+  /**
+   * Get pause status
+   */
+  async isPaused(): Promise<boolean> {
+    const isPaused = await this.rankingQueue.isPaused();
+    return isPaused;
+  }
+
   private async getAllCandidateIds(): Promise<string[]> {
     // Use aggregation for memory efficiency on large datasets
     const docs = await this.candidatesService['candidateModel']

@@ -54,4 +54,27 @@ export class RankingController {
     await this.rankingService.clearQueue();
     return { success: true, message: 'Queue cleared' };
   }
+
+  @Post('pause')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Pause the ranking worker (stops processing jobs)' })
+  async pauseWorker() {
+    await this.rankingService.pauseWorker();
+    return { success: true, message: 'Ranking worker paused' };
+  }
+
+  @Post('resume')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resume the ranking worker (resumes processing jobs)' })
+  async resumeWorker() {
+    await this.rankingService.resumeWorker();
+    return { success: true, message: 'Ranking worker resumed' };
+  }
+
+  @Get('pause-status')
+  @ApiOperation({ summary: 'Get the pause status of the ranking worker' })
+  async getPauseStatus() {
+    const isPaused = await this.rankingService.isPaused();
+    return { isPaused };
+  }
 }

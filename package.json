@@ -27,6 +27,8 @@
     "validate": "python3 scripts/validate_submission.py"
   },
   "dependencies": {
+    "@bull-board/express": "^8.0.1",
+    "@bull-board/ui": "^8.0.1",
     "@google/generative-ai": "^0.21.0",
     "@nestjs/bull": "^10.2.3",
     "@nestjs/bullmq": "^11.0.4",
