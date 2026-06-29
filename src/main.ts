@@ -7,6 +7,7 @@ import helmet from 'helmet';
 import { getQueueToken } from '@nestjs/bullmq';
 import { AppModule } from './app.module';
 import { setupBullBoard } from './bull-board.setup';
+import basicAuth = require('express-basic-auth');
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -53,6 +54,20 @@ async function bootstrap() {
 
     // ── Bull Board (dev only) ──
     try {
+       // 1. Get credentials from configuration
+      const bullUser = config.get<string>('bullboard.username', process.env.BULL_BOARD_USER ?? 'admin');
+      const bullPass = config.get<string>('bullboard.password', process.env.BULL_BOARD_PASSWORD ?? 'admin');
+
+      // 2. Apply Basic Auth middleware to the Bull Board route
+      app.use(
+        '/admin/bull-board',
+        basicAuth({
+          users: { [bullUser]: bullPass },
+          challenge: true,          // sends a 401 if not authenticated
+        }),
+      );
+
+      // 3. Mount Bull Board after the auth middleware
       const rankingQueue = app.get(getQueueToken('ranking'));
       setupBullBoard(app, [rankingQueue]);
       logger.log(`🎛️ Bull Board: http://localhost:${port}/admin/bull-board`);
