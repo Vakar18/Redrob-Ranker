@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@bull-board/express": "^8.0.1",
+    "@bull-board/nestjs": "^8.0.1",
     "@bull-board/ui": "^8.0.1",
     "@google/generative-ai": "^0.21.0",
     "@nestjs/bull": "^10.2.3",
@@ -43,6 +44,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "compression": "^1.7.4",
+    "express-basic-auth": "^1.2.1",
     "groq-sdk": "^0.9.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.2",

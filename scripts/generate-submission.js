@@ -249,6 +249,7 @@ function scoreBehavioral(c) {
 // ── Dimension: Availability (15%) ─────────────────────────────────
 function scoreAvailability(c) {
   const s   = c.redrob_signals ?? {};
+  console.log(`Candidate ${c.candidate_id} availability signals: open=${s.open_to_work_flag}, notice=${s.notice_period_days}, willing_relocate=${s.willing_to_relocate}, work_mode=${s.preferred_work_mode}`);
   let score = 0;
 
   score += s.open_to_work_flag ? 30 : 5;

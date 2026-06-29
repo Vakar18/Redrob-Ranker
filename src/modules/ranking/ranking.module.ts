@@ -8,6 +8,9 @@ import { RankingController } from './controllers/ranking.controller';
 import { DeterministicScorer } from './strategies/deterministic-scorer';
 import { LlmReranker } from './strategies/llm-reranker';
 import { RANKING_QUEUE } from './constants/queue.constants';
+import {  BullBoardModule } from '@bull-board/nestjs';
+import { BullAdapter } from '@bull-board/api/bullAdapter';
+
 
 @Module({
   imports: [
@@ -31,6 +34,10 @@ import { RANKING_QUEUE } from './constants/queue.constants';
         },
       }),
     }),
+    // BullBoardModule.forFeature({
+    //   name: RANKING_QUEUE,
+    //   adapter: BullAdapter,
+    // }),
   ],
   providers: [
     RankingProcessor,
