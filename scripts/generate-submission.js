@@ -27,12 +27,13 @@
  *   GROQ_API_KEY=gsk_... GEMINI_API_KEY=AIza... \
  *     node scripts/generate-submission.js --provider groq --fallback gemini
  */
-
+require('dotenv').config();
 'use strict';
 
 const fs       = require('fs');
 const path     = require('path');
 const mongoose = require('mongoose');
+
 
 // ── CLI ───────────────────────────────────────────────────────────
 const args     = process.argv.slice(2);
@@ -46,6 +47,7 @@ const LLM_TOP  = 300;
 const LLM_BATCH= 8;
 
 const GROQ_KEY    = process.env.GROQ_API_KEY ?? '';
+console.log("GROQ API Key initialized." , GROQ_KEY ? "✅" : "⚠️  Not set. Free key at https://console.groq.com");
 // If GROQ_MODEL is set explicitly, it's used as-is (no discovery).
 // Otherwise these are tried in order at startup — first one that
 // actually exists on your account/region wins.
